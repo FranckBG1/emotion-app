@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Détection des émotions</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    video { width: 320px; height: 240px; border: 1px solid #ccc; }
+    #status { margin-top: 10px; font-weight: bold; }
+    #startBtn, #resetBtn { margin-top: 10px; padding: 10px 20px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <h2>Analyse Visuelle</h2>
+  <video id="video" autoplay muted></video>
+  <div id="status">Appuyez sur le bouton pour démarrer</div>
+  <button id="startBtn">Lancer l’analyse</button>
+  <button id="resetBtn">Réinitialiser la session</button>
+
+  <h3>Historique des émotions</h3>
+  <ul id="history"></ul>
+
+  <script src="https://unpkg.com/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <script>
+    const video = document.getElementById('video');
+    const status = document.getElementById('status');
+    const startBtn = document.getElementById('startBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const historyList = document.getElementById('history');
+
+    const backendURL = "https://emotion-backend-540292246353.europe-west1.run.app/api/emotions";
+
+    let modelsLoaded = false;
+    let streamStarted = false;
+
+    async function loadModelsAndCamera() {
+      if (!modelsLoaded) {
+        status.textContent = "📦 Chargement des modèles...";
+        await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+        await faceapi.nets.faceExpressionNet.loadFromUri('/models');
+        modelsLoaded = true;
+      }
+
+      if (!streamStarted) {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+        video.srcObject = stream;
+        streamStarted = true;
+        status.textContent = "🎥 Webcam active. Prêt pour l’analyse.";
+      }
+    }
+
+    async function runSingleAnalysis() {
+      status.textContent = "🔍 Analyse en cours...";
+      const result = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceExpressions();
+
+      if (result) {
+        const expressions = result.expressions;
+        const sorted = Object.entries(expressions).sort((a, b) => b[1] - a[1]);
+        const [emotion, confidence] = sorted[0];
+        const timestamp = new Date().toISOString();
+
+        status.textContent = `😶 Émotion détectée : ${emotion} (${(confidence * 100).toFixed(1)}%)`;
+
+        const payload = {
+          user_id: "u001",
+          session_id: "sess-001",
+          mood: emotion,
+          confidence: confidence,
+          timestamp: timestamp
+        };
+
+        fetch(backendURL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        })
+        .then(response => response.json())
+        .then(data => {
+          status.textContent += ` ✅ ${data.message}`;
+          addToHistory(emotion, confidence, timestamp);
+        })
+        .catch(error => {
+          console.error("Erreur d’envoi :", error);
+          status.textContent += " ❌ Erreur réseau ou serveur";
+        });
+      } else {
+        status.textContent = '🚫 Visage non détecté';
+      }
+    }
+
+    function addToHistory(emotion, confidence, timestamp) {
+      const li = document.createElement('li');
+      li.textContent = `${new Date(timestamp).toLocaleTimeString()} — ${emotion} (${(confidence * 100).toFixed(1)}%)`;
+      historyList.prepend(li);
+    }
+
+    function resetSession() {
+      historyList.innerHTML = '';
+      status.textContent = "🔄 Session réinitialisée. Cliquez pour relancer une analyse.";
+    }
+
+    startBtn.addEventListener('click', async () => {
+      await loadModelsAndCamera();
+      await runSingleAnalysis();
+    });
+
+    resetBtn.addEventListener('click', resetSession);
+  </script>
+</body>
+</html>
