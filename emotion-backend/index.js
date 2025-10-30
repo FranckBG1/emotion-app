@@ -2,6 +2,7 @@
 const express = require("express");
 const { Firestore } = require("@google-cloud/firestore");
 const path = require("path");
+const fs = require("fs");
 
 const app = express();
 app.use(express.json());
@@ -20,8 +21,21 @@ const firestore = new Firestore({
 });
 const collection = firestore.collection("emotions");
 
-// ✅ Servir le frontend (HTML + JS + models)
+// ✅ Vérification que le frontend existe
 const FRONTEND_DIR = path.join(__dirname, "../emotion-frontend");
+if (!fs.existsSync(FRONTEND_DIR)) {
+  console.error("❌ FRONTEND_DIR introuvable :", FRONTEND_DIR);
+  process.exit(1); // Bloque le démarrage si frontend absent
+}
+
+// ✅ Vérification du dossier models (face-api.js)
+const MODEL_DIR = path.join(FRONTEND_DIR, "models");
+if (!fs.existsSync(MODEL_DIR)) {
+  console.error("❌ Dossier models introuvable :", MODEL_DIR);
+  process.exit(1); // Bloque le démarrage si models absent
+}
+
+// ✅ Servir le frontend (HTML + JS + models)
 app.use(express.static(FRONTEND_DIR));
 
 // Route principale
