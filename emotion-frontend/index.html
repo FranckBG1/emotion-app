@@ -1,110 +1,294 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Détection des émotions</title>
-  <style>
-    body { font-family: sans-serif; margin: 20px; }
-    video { width: 320px; height: 240px; border: 1px solid #ccc; }
-    #status { margin-top: 10px; font-weight: bold; }
-    #startBtn, #resetBtn { margin-top: 10px; padding: 10px 20px; font-size: 16px; }
-  </style>
-</head>
-<body>
-  <h2>Analyse Visuelle</h2>
-  <video id="video" autoplay muted></video>
-  <div id="status">Appuyez sur le bouton pour démarrer</div>
-  <button id="startBtn">Lancer l’analyse</button>
-  <button id="resetBtn">Réinitialiser la session</button>
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <title>Analyse des émotions — Live points</title>
+    <script src="https://unpkg.com/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      :root {
+        --card-w: 340px;
+        --card-h: 260px;
+      }
+      body {
+        font-family: "Segoe UI", sans-serif;
+        background: #f4f6f8;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 20px;
+        margin: 0;
+        color: #222;
+      }
+      h1 {
+        margin: 6px 0 14px;
+      }
+      #camera-container {
+        position: relative;
+        width: var(--card-w);
+        height: var(--card-h);
+        border-radius: 12px;
+        overflow: hidden;
+        background: #000;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+      }
+      video {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: scaleX(-1); /* miroir pour front camera */
+      }
+      canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        z-index: 2;
+        transform: scaleX(-1); /* même miroir que la vidéo */
+        pointer-events: none; /* laisse passer les clics */
+        width: 100%;
+        height: 100%;
+      }
+      #controls {
+        margin-top: 14px;
+        display: flex;
+        gap: 10px;
+      }
+      button {
+        background: #009688;
+        color: white;
+        border: none;
+        padding: 10px 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      button:hover {
+        background: #4db6ac;
+      }
+      #status {
+        margin-top: 12px;
+        font-weight: 600;
+      }
+      #history {
+        margin-top: 14px;
+        width: var(--card-w);
+        max-height: 180px;
+        overflow: auto;
+        padding: 0;
+        list-style: none;
+      }
+      #history li {
+        padding: 8px;
+        border-bottom: 1px solid #e6e9ec;
+        background: #fff;
+        border-radius: 4px;
+        margin: 6px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="camera-container">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="overlay"></canvas>
+    </div>
 
-  <h3>Historique des émotions</h3>
-  <ul id="history"></ul>
+    <div id="controls">
+      <button id="analyzeBtn">🎯 Lancer l’analyse</button>
+      <button id="resetBtn">🔄 Réinitialiser</button>
+    </div>
 
-  <script src="https://unpkg.com/face-api.js@0.22.2/dist/face-api.min.js"></script>
-  <script>
-    const video = document.getElementById('video');
-    const status = document.getElementById('status');
-    const startBtn = document.getElementById('startBtn');
-    const resetBtn = document.getElementById('resetBtn');
-    const historyList = document.getElementById('history');
+    <div id="status">Initialisation…</div>
 
-    const backendURL = "https://emotion-backend-540292246353.europe-west1.run.app/api/emotions";
+    <script>
+      // === CONFIG : mets ici tes endpoints backend ===
+      const BACKEND_URL =
+        "https://emotion-backend-540292246353.europe-west1.run.app/api/emotions";
+      // const HISTORY_URL =
+      // "https://emotion-backend-540292246353.europe-west1.run.app/api/emotions/history";
 
-    let modelsLoaded = false;
-    let streamStarted = false;
+      // === DOM ===
+      const video = document.getElementById("video");
+      const canvas = document.getElementById("overlay");
+      const ctx = canvas.getContext("2d");
+      const statusEl = document.getElementById("status");
+      const analyzeBtn = document.getElementById("analyzeBtn");
+      const resetBtn = document.getElementById("resetBtn");
+      const historyEl = document.getElementById("history");
 
-    async function loadModelsAndCamera() {
-      if (!modelsLoaded) {
-        status.textContent = "📦 Chargement des modèles...";
-        await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
-        await faceapi.nets.faceExpressionNet.loadFromUri('/models');
-        modelsLoaded = true;
+      // === State ===
+      let modelsLoaded = false;
+      let streamStarted = false;
+      let displaySize = { width: 0, height: 0 };
+      let trackingTimer = null;
+
+      // === Helpers ===
+      function setCanvasToVideoSize() {
+        // Utilise les dimensions réelles de la vidéo pour le canvas (pixel coords)
+        displaySize.width = video.videoWidth || video.clientWidth;
+        displaySize.height = video.videoHeight || video.clientHeight;
+        // Set element pixel size
+        canvas.width = displaySize.width;
+        canvas.height = displaySize.height;
+        // CSS width/height already set to 100% in stylesheet
+        faceapi.matchDimensions(canvas, displaySize);
       }
 
-      if (!streamStarted) {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+      function drawPoints(points) {
+        // Clear then draw small circles for each landmark
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "rgba(0,200,120,0.9)";
+        for (let p of points) {
+          // p.x / p.y are in video pixel coordinates (after resizeResults)
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 2.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // === Load models and camera ===
+      async function loadModels() {
+        statusEl.textContent = "📦 Chargement des modèles...";
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri("/models"),
+          faceapi.nets.faceLandmark68Net.loadFromUri("/models"),
+          faceapi.nets.faceExpressionNet.loadFromUri("/models"),
+        ]);
+        modelsLoaded = true;
+        statusEl.textContent = "✅ Modèles chargés";
+      }
+
+      async function startCamera() {
+        statusEl.textContent = "🎥 Activation caméra...";
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+        });
         video.srcObject = stream;
         streamStarted = true;
-        status.textContent = "🎥 Webcam active. Prêt pour l’analyse.";
+        // Wait metadata to get correct sizes
+        await new Promise((resolve) => {
+          video.onloadedmetadata = () => {
+            video.play();
+            setCanvasToVideoSize();
+            resolve();
+          };
+        });
+        statusEl.textContent = "🎥 Caméra active";
       }
-    }
 
-    async function runSingleAnalysis() {
-      status.textContent = "🔍 Analyse en cours...";
-      const result = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceExpressions();
+      // === Live tracking (points only) ===
+      function startLiveTracking() {
+        // clear old interval
+        if (trackingTimer) clearInterval(trackingTimer);
+        trackingTimer = setInterval(async () => {
+          if (!modelsLoaded || !streamStarted) return;
+          // detect landmarks only (fast)
+          const res = await faceapi
+            .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+            .withFaceLandmarks();
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          if (res && res.landmarks && res.landmarks.positions) {
+            const resized = faceapi.resizeResults(res, displaySize);
+            drawPoints(resized.landmarks.positions);
+          }
+        }, 100); // 100ms => 10 fps
+      }
 
-      if (result) {
-        const expressions = result.expressions;
-        const sorted = Object.entries(expressions).sort((a, b) => b[1] - a[1]);
-        const [emotion, confidence] = sorted[0];
-        const timestamp = new Date().toISOString();
+      // === Load history from backend ===
+      /* async function loadHistory() {
+        try {
+          const r = await fetch(HISTORY_URL);
+          if (!r.ok) throw new Error("Erreur HTTP " + r.status);
+          const data = await r.json();
+          historyEl.innerHTML = "";
+          // assume data is array sorted by time asc or desc
+          data.forEach((item) => {
+            const li = document.createElement("li");
+            li.textContent = `${new Date(
+              item.timestamp
+            ).toLocaleTimeString()} — ${item.mood} (${(
+              item.confidence * 100
+            ).toFixed(1)}%)`;
+            historyEl.prepend(li);
+          });
+        } catch (e) {
+          console.error("loadHistory:", e);
+        }
+      }*/
 
-        status.textContent = `😶 Émotion détectée : ${emotion} (${(confidence * 100).toFixed(1)}%)`;
+      // === Analyze on click (2s fake delay) ===
+      async function analyzeOnce() {
+        if (!modelsLoaded || !streamStarted) return;
+        statusEl.textContent = "⏳ Analyse en cours...";
+        // small delay so user sees something
+        await new Promise((r) => setTimeout(r, 2000));
 
+        // emotion detection
+        const res = await faceapi
+          .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+          .withFaceExpressions();
+        if (!res) {
+          statusEl.textContent = "🚫 Visage non détecté";
+          return;
+        }
+        const sorted = Object.entries(res.expressions).sort(
+          (a, b) => b[1] - a[1]
+        );
+        const [mood, confidence] = sorted[0];
+        statusEl.textContent = `😶 ${mood} (${(confidence * 100).toFixed(1)}%)`;
+
+        // send to backend (Firestore via your Node backend)
         const payload = {
           user_id: "u001",
           session_id: "sess-001",
-          mood: emotion,
-          confidence: confidence,
-          timestamp: timestamp
+          mood,
+          confidence,
+          timestamp: new Date().toISOString(),
         };
-
-        fetch(backendURL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        })
-        .then(response => response.json())
-        .then(data => {
-          status.textContent += ` ✅ ${data.message}`;
-          addToHistory(emotion, confidence, timestamp);
-        })
-        .catch(error => {
-          console.error("Erreur d’envoi :", error);
-          status.textContent += " ❌ Erreur réseau ou serveur";
-        });
-      } else {
-        status.textContent = '🚫 Visage non détecté';
+        try {
+          const r = await fetch(BACKEND_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          // optionally check r.ok
+          //  await loadHistory();
+        } catch (e) {
+          console.error("Erreur envoi backend:", e);
+        }
       }
-    }
 
-    function addToHistory(emotion, confidence, timestamp) {
-      const li = document.createElement('li');
-      li.textContent = `${new Date(timestamp).toLocaleTimeString()} — ${emotion} (${(confidence * 100).toFixed(1)}%)`;
-      historyList.prepend(li);
-    }
+      function resetAll() {
+        historyEl.innerHTML = "";
+        statusEl.textContent = "🔄 Réinitialisé";
+        ctx && ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
 
-    function resetSession() {
-      historyList.innerHTML = '';
-      status.textContent = "🔄 Session réinitialisée. Cliquez pour relancer une analyse.";
-    }
+      // === Init all on load ===
+      window.addEventListener("load", async () => {
+        try {
+          await loadModels();
+          await startCamera();
+          // ensure canvas styles/sizes reflect video (in case of resizing)
+          setCanvasToVideoSize();
+          startLiveTracking();
+          // await loadHistory();
+          statusEl.textContent = "Prêt";
+          // also handle window resize to update canvas size
+          window.addEventListener("resize", () => {
+            setCanvasToVideoSize();
+          });
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent =
+            "Erreur initialisation: " + (err.message || err);
+        }
+      });
 
-    startBtn.addEventListener('click', async () => {
-      await loadModelsAndCamera();
-      await runSingleAnalysis();
-    });
-
-    resetBtn.addEventListener('click', resetSession);
-  </script>
-</body>
+      analyzeBtn.addEventListener("click", analyzeOnce);
+      resetBtn.addEventListener("click", resetAll);
+    </script>
+  </body>
 </html>
