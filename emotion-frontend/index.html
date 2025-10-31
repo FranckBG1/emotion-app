@@ -97,7 +97,6 @@
 
     <div id="controls">
       <button id="analyzeBtn">Lancer l’analyse</button>
-      <button id="resetBtn">🔄 Réinitialiser</button>
     </div>
 
     <div id="status">Initialisation…</div>
@@ -115,7 +114,7 @@
       const ctx = canvas.getContext("2d");
       const statusEl = document.getElementById("status");
       const analyzeBtn = document.getElementById("analyzeBtn");
-      const resetBtn = document.getElementById("resetBtn");
+
       const historyEl = document.getElementById("history");
 
       // === State ===
@@ -260,24 +259,6 @@
         }
       }
 
-      function resetAll() {
-        // 1️⃣ Efface l’historique
-        historyEl.innerHTML = "";
-
-        // 2️⃣ Efface le canvas
-        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // 3️⃣ Reset status
-        statusEl.textContent = "🔄 Réinitialisé";
-
-        // 4️⃣ (Optionnel) Réinitialiser le tracking live
-        // Si tu veux stopper et relancer les points après reset :
-        if (trackingTimer) {
-          clearInterval(trackingTimer);
-          startLiveTracking(); // relance l’intervalle de tracking
-        }
-      }
-
       // === Init all on load ===
       window.addEventListener("load", async () => {
         try {
@@ -300,7 +281,6 @@
       });
 
       analyzeBtn.addEventListener("click", analyzeOnce);
-      resetBtn.addEventListener("click", resetAll);
     </script>
   </body>
 </html>
